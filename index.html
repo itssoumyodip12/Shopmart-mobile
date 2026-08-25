@@ -18,7 +18,30 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useMemo } = React;
+const { useState, useMemo, useEffect } = React;
+
+/* ---------- "DATABASE" LAYER (browser localStorage) ----------
+   NOTE: this is a client-side demo, not a real backend.
+   - Users are stored under the key "shopmart_users" as { username: {password, name, email} }
+   - Passwords are stored in PLAIN TEXT for demo simplicity — never do this in production.
+   - Each user's cart/wishlist/orders/address are stored under "shopmart_data_<username>"
+   - A real app needs a server with a proper database and hashed passwords.
+------------------------------------------------------------- */
+const DB = {
+  getUsers() { try { return JSON.parse(localStorage.getItem("shopmart_users")) || {}; } catch (e) { return {}; } },
+  saveUsers(users) { localStorage.setItem("shopmart_users", JSON.stringify(users)); },
+  getSession() { return localStorage.getItem("shopmart_session"); },
+  setSession(username) { localStorage.setItem("shopmart_session", username); },
+  clearSession() { localStorage.removeItem("shopmart_session"); },
+  getUserData(username) {
+    try {
+      const raw = JSON.parse(localStorage.getItem("shopmart_data_" + username));
+      if (!raw) return { cart: {}, wishlist: [], orders: [], address: { name: "", street: "", city: "", zip: "", card: "" } };
+      return { cart: raw.cart || {}, wishlist: raw.wishlist || [], orders: raw.orders || [], address: raw.address || { name: "", street: "", city: "", zip: "", card: "" } };
+    } catch (e) { return { cart: {}, wishlist: [], orders: [], address: { name: "", street: "", city: "", zip: "", card: "" } }; }
+  },
+  saveUserData(username, data) { localStorage.setItem("shopmart_data_" + username, JSON.stringify(data)); },
+};
 
 const CATS = ["All", "Electronics", "Home & Kitchen", "Fashion", "Books", "Toys & Games", "Beauty"];
 const CAT_ACCENT = {
@@ -82,9 +105,7 @@ function PriceStamp({ price, was, size }) {
 
 function Badge({ text }) {
   const c = text === "Deal" ? { bg: "#E4623F", fg: "#fff" } : { bg: "#1B1F3B", fg: "#F1EAD9" };
-  return (
-    <span style={{ position: "absolute", top: 8, left: 0, background: c.bg, color: c.fg, fontSize: 9.5, fontWeight: 700, letterSpacing: 0.3, padding: "3px 8px", borderRadius: "0 3px 3px 0", textTransform: "uppercase", zIndex: 2 }}>{text}</span>
-  );
+  return <span style={{ position: "absolute", top: 8, left: 0, background: c.bg, color: c.fg, fontSize: 9.5, fontWeight: 700, letterSpacing: 0.3, padding: "3px 8px", borderRadius: "0 3px 3px 0", textTransform: "uppercase", zIndex: 2 }}>{text}</span>;
 }
 
 function Sheet({ open, onClose, title, children, heightVh }) {
@@ -92,14 +113,8 @@ function Sheet({ open, onClose, title, children, heightVh }) {
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 80 }}>
       <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.4)" }} />
-      <div style={{
-        position: "absolute", left: 0, right: 0, bottom: 0, background: "#F6F3EA",
-        borderRadius: "16px 16px 0 0", maxHeight: (heightVh || 75) + "vh", display: "flex", flexDirection: "column",
-        boxShadow: "0 -8px 24px rgba(0,0,0,0.2)"
-      }}>
-        <div style={{ display: "flex", justifyContent: "center", padding: "10px 0 4px" }}>
-          <div style={{ width: 36, height: 4, borderRadius: 2, background: "#D8D5C4" }} />
-        </div>
+      <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, background: "#F6F3EA", borderRadius: "16px 16px 0 0", maxHeight: (heightVh || 75) + "vh", display: "flex", flexDirection: "column", boxShadow: "0 -8px 24px rgba(0,0,0,0.2)" }}>
+        <div style={{ display: "flex", justifyContent: "center", padding: "10px 0 4px" }}><div style={{ width: 36, height: 4, borderRadius: 2, background: "#D8D5C4" }} /></div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 18px 12px", borderBottom: "1px solid #E4E1D3" }}>
           <span style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 17 }}>{title}</span>
           <button onClick={onClose} style={{ background: "#EAE6D8", border: "none", borderRadius: "50%", width: 30, height: 30, fontSize: 15, cursor: "pointer" }}>✕</button>
@@ -110,23 +125,129 @@ function Sheet({ open, onClose, title, children, heightVh }) {
   );
 }
 
+function AuthScreen({ onLogin }) {
+  const [mode, setMode] = useState("login");
+  const [form, setForm] = useState({ name: "", email: "", username: "", password: "", confirm: "" });
+  const [error, setError] = useState("");
+  const inputStyle = { border: "1px solid #D8D5C4", borderRadius: 8, padding: "13px 14px", fontSize: 16, outline: "none", width: "100%" };
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+    const users = DB.getUsers();
+    if (mode === "signup") {
+      if (!form.name || !form.email || !form.username || !form.password) { setError("Please fill in every field."); return; }
+      if (form.password !== form.confirm) { setError("Passwords don't match."); return; }
+      if (users[form.username]) { setError("That username is already taken."); return; }
+      users[form.username] = { password: form.password, name: form.name, email: form.email };
+      DB.saveUsers(users);
+      DB.setSession(form.username);
+      onLogin({ username: form.username, name: form.name, email: form.email });
+    } else {
+      const u = users[form.username];
+      if (!u || u.password !== form.password) { setError("Incorrect username or password."); return; }
+      DB.setSession(form.username);
+      onLogin({ username: form.username, name: u.name, email: u.email });
+    }
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#1B1F3B", display: "flex", flexDirection: "column", justifyContent: "center", padding: 24, maxWidth: 480, margin: "0 auto" }}>
+      <div style={{ textAlign: "center", marginBottom: 28 }}>
+        <div style={{ fontFamily: "Fraunces, serif", fontWeight: 800, fontSize: 30, color: "#F1EAD9" }}>shop<span style={{ color: "#D9A441" }}>mart</span></div>
+        <div style={{ color: "#B9B49C", fontSize: 13, marginTop: 6 }}>The weekend bazaar</div>
+      </div>
+
+      <div style={{ background: "#F6F3EA", borderRadius: 16, padding: 24 }}>
+        <div style={{ display: "flex", background: "#EAE6D8", borderRadius: 10, padding: 4, marginBottom: 20 }}>
+          <button onClick={() => { setMode("login"); setError(""); }} style={{ flex: 1, background: mode === "login" ? "#1B1F3B" : "transparent", color: mode === "login" ? "#F1EAD9" : "#5C594A", border: "none", borderRadius: 8, padding: "10px 0", fontWeight: 700, fontSize: 13.5 }}>Log in</button>
+          <button onClick={() => { setMode("signup"); setError(""); }} style={{ flex: 1, background: mode === "signup" ? "#1B1F3B" : "transparent", color: mode === "signup" ? "#F1EAD9" : "#5C594A", border: "none", borderRadius: 8, padding: "10px 0", fontWeight: 700, fontSize: 13.5 }}>Sign up</button>
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
+          {mode === "signup" && (
+            <>
+              <input placeholder="Full name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
+              <input placeholder="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={inputStyle} />
+            </>
+          )}
+          <input placeholder="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} style={inputStyle} autoCapitalize="none" />
+          <input placeholder="Password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} style={inputStyle} />
+          {mode === "signup" && <input placeholder="Confirm password" type="password" value={form.confirm} onChange={(e) => setForm({ ...form, confirm: e.target.value })} style={inputStyle} />}
+
+          {error && <div style={{ color: "#C9603E", fontSize: 12.5, fontWeight: 600 }}>{error}</div>}
+
+          <button type="submit" style={{ background: "#D9A441", color: "#1B1F3B", border: "none", borderRadius: 8, padding: "14px 0", fontWeight: 700, fontSize: 15, marginTop: 6 }}>
+            {mode === "login" ? "Log in" : "Create account"}
+          </button>
+        </form>
+      </div>
+
+      <div style={{ textAlign: "center", color: "#8A8672", fontSize: 11, marginTop: 18 }}>
+        Log in for daily offers and discounts.
+      </div>
+    </div>
+  );
+}
+
 function ShopMart() {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
   const [view, setView] = useState("home");
   const [cart, setCart] = useState({});
   const [wishlist, setWishlist] = useState(new Set());
+  const [orders, setOrders] = useState([]);
+  const [address, setAddress] = useState({ name: "", street: "", city: "", zip: "", card: "" });
+
   const [cartOpen, setCartOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
   const [sortBy, setSortBy] = useState("featured");
   const [maxPrice, setMaxPrice] = useState(250);
   const [minRating, setMinRating] = useState(0);
-  const [orders, setOrders] = useState([]);
-  const [address, setAddress] = useState({ name: "", street: "", city: "", zip: "", card: "" });
   const [lastOrder, setLastOrder] = useState(null);
   const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    const session = DB.getSession();
+    if (session) {
+      const users = DB.getUsers();
+      if (users[session]) {
+        const data = DB.getUserData(session);
+        setCart(data.cart);
+        setWishlist(new Set(data.wishlist));
+        setOrders(data.orders.map((o) => ({ ...o, date: new Date(o.date) })));
+        setAddress(data.address);
+        setCurrentUser({ username: session, name: users[session].name, email: users[session].email });
+      }
+    }
+    setAuthChecked(true);
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    DB.saveUserData(currentUser.username, { cart, wishlist: Array.from(wishlist), orders, address });
+  }, [cart, wishlist, orders, address, currentUser]);
+
+  function handleLogin(user) {
+    const data = DB.getUserData(user.username);
+    setCart(data.cart);
+    setWishlist(new Set(data.wishlist));
+    setOrders(data.orders.map((o) => ({ ...o, date: new Date(o.date) })));
+    setAddress(data.address);
+    setCurrentUser(user);
+    setView("home");
+  }
+
+  function handleLogout() {
+    DB.clearSession();
+    setCurrentUser(null);
+    setCart({}); setWishlist(new Set()); setOrders([]); setAddress({ name: "", street: "", city: "", zip: "", card: "" });
+    setView("home");
+  }
 
   function showToast(msg) { setToast(msg); setTimeout(() => setToast(null), 1600); }
   function addToCart(id) { setCart((c) => ({ ...c, [id]: (c[id] || 0) + 1 })); showToast("Added to cart"); }
@@ -161,37 +282,35 @@ function ShopMart() {
   }
 
   const inputStyle = { border: "1px solid #D8D5C4", borderRadius: 8, padding: "13px 14px", fontSize: 16, outline: "none", width: "100%" };
-  const navBtn = (active) => ({ background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, color: active ? "#1B1F3B" : "#9C9885", fontSize: 10.5, fontWeight: 600, cursor: "pointer", flex: 1, padding: "6px 0", position: "relative" });
+  const navBtn = (active) => ({ background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, color: active ? "#1B1F3B" : "#9C9885", fontSize: 10, fontWeight: 600, cursor: "pointer", flex: 1, padding: "6px 0", position: "relative" });
 
   function SummaryRow({ label, value, bold }) {
     return <div style={{ display: "flex", justifyContent: "space-between", fontSize: bold ? 15 : 13.5, fontWeight: bold ? 700 : 400, marginBottom: 8, color: bold ? "#22241F" : "#5C594A" }}><span>{label}</span><span>{value === 0 ? "FREE" : money(value)}</span></div>;
   }
+
+  if (!authChecked) return null;
+  if (!currentUser) return <AuthScreen onLogin={handleLogin} />;
 
   return (
     <div style={{ fontFamily: "Inter, sans-serif", background: "#EEF1EE", minHeight: "100vh", color: "#22241F", maxWidth: 480, margin: "0 auto", position: "relative", paddingBottom: 66 }}>
 
       <header style={{ background: "#1B1F3B", color: "#F1EAD9", position: "sticky", top: 0, zIndex: 40 }}>
         <div style={{ padding: "12px 14px 8px", display: "flex", alignItems: "center", gap: 10 }}>
-          <div onClick={() => setView("home")} style={{ cursor: "pointer", fontFamily: "Fraunces, serif", fontWeight: 800, fontSize: 21 }}>
-            shop<span style={{ color: "#D9A441" }}>mart</span>
-          </div>
+          <div onClick={() => setView("home")} style={{ cursor: "pointer", fontFamily: "Fraunces, serif", fontWeight: 800, fontSize: 21 }}>shop<span style={{ color: "#D9A441" }}>mart</span></div>
           <div style={{ flex: 1 }} />
-          <button onClick={() => toggleWishlist("__view__")} style={{ display: "none" }} />
+          <button onClick={() => setView("profile")} style={{ background: "#D9A441", color: "#1B1F3B", border: "none", borderRadius: "50%", width: 30, height: 30, fontWeight: 700, fontSize: 13 }}>
+            {currentUser.name ? currentUser.name[0].toUpperCase() : "U"}
+          </button>
         </div>
         <div style={{ padding: "0 14px 10px", display: "flex", gap: 8 }}>
           <div style={{ flex: 1, display: "flex", alignItems: "center", background: "#F1EAD9", borderRadius: 8, overflow: "hidden" }}>
             <span style={{ marginLeft: 10, color: "#7A7660", fontSize: 15 }}>🔍</span>
-            <input value={query} onChange={(e) => { setQuery(e.target.value); setView("home"); }} placeholder="Search shopmart"
-              style={{ border: "none", outline: "none", padding: "10px 8px", flex: 1, fontSize: 15, background: "transparent", color: "#22241F", minWidth: 0 }} />
+            <input value={query} onChange={(e) => { setQuery(e.target.value); setView("home"); }} placeholder="Search shopmart" style={{ border: "none", outline: "none", padding: "10px 8px", flex: 1, fontSize: 15, background: "transparent", color: "#22241F", minWidth: 0 }} />
           </div>
         </div>
         <div style={{ background: "#252A4D", overflowX: "auto", whiteSpace: "nowrap", padding: "8px 14px" }}>
           {CATS.map((c) => (
-            <button key={c} onClick={() => { setCategory(c); setView("home"); }} style={{
-              background: category === c ? "#D9A441" : "transparent", border: category === c ? "none" : "1px solid #454B78",
-              color: category === c ? "#1B1F3B" : "#D8D5C4", fontWeight: 600, fontSize: 12.5, padding: "5px 12px",
-              borderRadius: 999, marginRight: 8, cursor: "pointer"
-            }}>{c}</button>
+            <button key={c} onClick={() => { setCategory(c); setView("home"); }} style={{ background: category === c ? "#D9A441" : "transparent", border: category === c ? "none" : "1px solid #454B78", color: category === c ? "#1B1F3B" : "#D8D5C4", fontWeight: 600, fontSize: 12.5, padding: "5px 12px", borderRadius: 999, marginRight: 8, cursor: "pointer" }}>{c}</button>
           ))}
         </div>
       </header>
@@ -202,19 +321,15 @@ function ShopMart() {
         <main style={{ padding: "14px 14px 20px" }}>
           {!query && category === "All" && (
             <div style={{ background: "linear-gradient(120deg,#1B1F3B,#2E3564)", borderRadius: 14, color: "#F1EAD9", padding: "22px 18px", marginBottom: 16 }}>
-              <div style={{ color: "#D9A441", fontWeight: 700, fontSize: 11, letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 }}>The weekend bazaar</div>
+              <div style={{ color: "#D9A441", fontWeight: 700, fontSize: 11, letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 }}>Welcome back{currentUser.name ? ", " + currentUser.name.split(" ")[0] : ""}</div>
               <div style={{ fontFamily: "Fraunces, serif", fontSize: 21, fontWeight: 700, marginBottom: 6, lineHeight: 1.2 }}>Everything you need, priced to move.</div>
               <div style={{ color: "#C9C5B0", fontSize: 13, lineHeight: 1.5 }}>Free delivery on orders over $35 🛍️</div>
             </div>
           )}
-
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-            <button onClick={() => setFilterOpen(true)} style={{ flex: 1, background: "#fff", border: "1px solid #D8D5C4", borderRadius: 8, padding: "10px 0", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-              🧰 Filter & Sort
-            </button>
+            <button onClick={() => setFilterOpen(true)} style={{ flex: 1, background: "#fff", border: "1px solid #D8D5C4", borderRadius: 8, padding: "10px 0", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>🧰 Filter & Sort</button>
             <div style={{ background: "#fff", border: "1px solid #D8D5C4", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#5C594A", whiteSpace: "nowrap" }}>{filtered.length} items</div>
           </div>
-
           {filtered.length === 0 ? (
             <div style={{ background: "#fff", borderRadius: 10, padding: 40, textAlign: "center", color: "#6B6858", fontSize: 13.5 }}>No products match. Try adjusting filters.</div>
           ) : (
@@ -245,9 +360,7 @@ function ShopMart() {
 
       {view === "product" && selectedProduct && (
         <main style={{ paddingBottom: 90 }}>
-          <div style={{ padding: "12px 14px" }}>
-            <button onClick={() => setView("home")} style={{ background: "none", border: "none", color: "#3F7C74", fontSize: 13.5, fontWeight: 600 }}>← Back</button>
-          </div>
+          <div style={{ padding: "12px 14px" }}><button onClick={() => setView("home")} style={{ background: "none", border: "none", color: "#3F7C74", fontSize: 13.5, fontWeight: 600 }}>← Back</button></div>
           <div style={{ background: CAT_ACCENT[selectedProduct.category].bg, height: 220, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 96 }}>{selectedProduct.emoji}</div>
           <div style={{ background: "#fff", borderRadius: "16px 16px 0 0", marginTop: -16, padding: 20, position: "relative" }}>
             <span style={{ fontSize: 11, fontWeight: 700, color: CAT_ACCENT[selectedProduct.category].text, textTransform: "uppercase" }}>{selectedProduct.category}</span>
@@ -318,7 +431,7 @@ function ShopMart() {
         <main style={{ padding: "16px 14px 30px" }}>
           <h1 style={{ fontFamily: "Fraunces, serif", fontSize: 21, fontWeight: 700, marginBottom: 16 }}>Your orders</h1>
           {orders.length === 0 ? (
-            <div style={{ background: "#fff", borderRadius: 10, padding: 40, textAlign: "center", color: "#6B6858", fontSize: 13.5 }}>📦<div style={{ marginTop: 6 }}>No orders yet this session.</div></div>
+            <div style={{ background: "#fff", borderRadius: 10, padding: 40, textAlign: "center", color: "#6B6858", fontSize: 13.5 }}>📦<div style={{ marginTop: 6 }}>No orders yet.</div></div>
           ) : orders.map((o) => (
             <div key={o.id} style={{ background: "#fff", borderRadius: 10, padding: 14, marginBottom: 10 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 12, color: "#6B6858" }}><span>{o.id} · {o.date.toLocaleDateString()}</span><span style={{ fontWeight: 700, color: "#22241F" }}>{money(o.total)}</span></div>
@@ -328,20 +441,35 @@ function ShopMart() {
         </main>
       )}
 
-      {/* BOTTOM NAV */}
+      {view === "profile" && (
+        <main style={{ padding: "16px 14px 30px" }}>
+          <h1 style={{ fontFamily: "Fraunces, serif", fontSize: 21, fontWeight: 700, marginBottom: 16 }}>Your account</h1>
+          <div style={{ background: "#fff", borderRadius: 10, padding: 18, marginBottom: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+              <div style={{ width: 46, height: 46, borderRadius: "50%", background: "#D9A441", color: "#1B1F3B", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 18 }}>{currentUser.name ? currentUser.name[0].toUpperCase() : "U"}</div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>{currentUser.name}</div>
+                <div style={{ fontSize: 12.5, color: "#6B6858" }}>@{currentUser.username}</div>
+              </div>
+            </div>
+            <div style={{ fontSize: 13, color: "#5C594A", marginBottom: 4 }}>Email: {currentUser.email}</div>
+            <div style={{ fontSize: 13, color: "#5C594A" }}>Orders placed: {orders.length}</div>
+          </div>
+          <button onClick={handleLogout} style={{ width: "100%", background: "#fff", border: "1px solid #C9603E", color: "#C9603E", borderRadius: 8, padding: "13px 0", fontWeight: 700, fontSize: 14 }}>Log out</button>
+          <div style={{ textAlign: "center", color: "#8A8672", fontSize: 11, marginTop: 14 }}>Account data is stored locally in this browser only.</div>
+        </main>
+      )}
+
       <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, maxWidth: 480, margin: "0 auto", background: "#fff", borderTop: "1px solid #E4E1D3", display: "flex", zIndex: 50, boxShadow: "0 -2px 10px rgba(0,0,0,0.05)" }}>
         <button onClick={() => setView("home")} style={navBtn(view === "home")}><span style={{ fontSize: 18 }}>🏠</span>Home</button>
         <button onClick={() => setFilterOpen(true)} style={navBtn(filterOpen)}><span style={{ fontSize: 18 }}>🧰</span>Filter</button>
         <button onClick={() => setCartOpen(true)} style={navBtn(cartOpen)}>
-          <span style={{ fontSize: 18, position: "relative" }}>
-            🛒
-            {cartCount > 0 && <span style={{ position: "absolute", top: -6, right: -10, background: "#D9A441", color: "#1B1F3B", fontSize: 9.5, fontWeight: 700, borderRadius: 999, minWidth: 14, height: 14, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{cartCount}</span>}
-          </span>Cart
+          <span style={{ fontSize: 18, position: "relative" }}>🛒{cartCount > 0 && <span style={{ position: "absolute", top: -6, right: -10, background: "#D9A441", color: "#1B1F3B", fontSize: 9.5, fontWeight: 700, borderRadius: 999, minWidth: 14, height: 14, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{cartCount}</span>}</span>Cart
         </button>
         <button onClick={() => setView("orders")} style={navBtn(view === "orders")}><span style={{ fontSize: 18 }}>📦</span>Orders</button>
+        <button onClick={() => setView("profile")} style={navBtn(view === "profile")}><span style={{ fontSize: 18 }}>👤</span>Profile</button>
       </nav>
 
-      {/* FILTER SHEET */}
       <Sheet open={filterOpen} onClose={() => setFilterOpen(false)} title="Filter & Sort">
         <div style={{ marginBottom: 18 }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, color: "#6B6858", textTransform: "uppercase", marginBottom: 8 }}>Sort by</div>
@@ -355,9 +483,7 @@ function ShopMart() {
         <div style={{ marginBottom: 18 }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, color: "#6B6858", textTransform: "uppercase", marginBottom: 8 }}>Category</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {CATS.map((c) => (
-              <button key={c} onClick={() => setCategory(c)} style={{ background: category === c ? "#1B1F3B" : "#fff", color: category === c ? "#F1EAD9" : "#5C594A", border: "1px solid #D8D5C4", borderRadius: 999, padding: "7px 13px", fontSize: 12.5, fontWeight: 600 }}>{c}</button>
-            ))}
+            {CATS.map((c) => <button key={c} onClick={() => setCategory(c)} style={{ background: category === c ? "#1B1F3B" : "#fff", color: category === c ? "#F1EAD9" : "#5C594A", border: "1px solid #D8D5C4", borderRadius: 999, padding: "7px 13px", fontSize: 12.5, fontWeight: 600 }}>{c}</button>)}
           </div>
         </div>
         <div style={{ marginBottom: 18 }}>
@@ -367,15 +493,12 @@ function ShopMart() {
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, color: "#6B6858", textTransform: "uppercase", marginBottom: 8 }}>Min rating</div>
           <div style={{ display: "flex", gap: 8 }}>
-            {[0, 3, 4, 4.5].map((r) => (
-              <button key={r} onClick={() => setMinRating(r)} style={{ flex: 1, background: minRating === r ? "#C9603E" : "#fff", color: minRating === r ? "#fff" : "#5C594A", border: "1px solid #D8D5C4", borderRadius: 8, padding: "8px 0", fontSize: 12 }}>{r === 0 ? "Any" : r + "+"}</button>
-            ))}
+            {[0, 3, 4, 4.5].map((r) => <button key={r} onClick={() => setMinRating(r)} style={{ flex: 1, background: minRating === r ? "#C9603E" : "#fff", color: minRating === r ? "#fff" : "#5C594A", border: "1px solid #D8D5C4", borderRadius: 8, padding: "8px 0", fontSize: 12 }}>{r === 0 ? "Any" : r + "+"}</button>)}
           </div>
         </div>
         <button onClick={() => setFilterOpen(false)} style={{ width: "100%", background: "#D9A441", color: "#1B1F3B", border: "none", borderRadius: 8, padding: "13px 0", fontWeight: 700, fontSize: 14 }}>Show {filtered.length} results</button>
       </Sheet>
 
-      {/* CART SHEET */}
       <Sheet open={cartOpen} onClose={() => setCartOpen(false)} title={"Your cart (" + cartCount + ")"} heightVh={85}>
         {cartItems.length === 0 ? (
           <div style={{ textAlign: "center", color: "#8A8672", padding: "30px 0", fontSize: 13.5 }}>Your cart is empty.</div>
